@@ -6,42 +6,49 @@ pub trait WebsiteOutput {
     fn should_process(&self) -> bool;
 }
 
-pub enum NextAction<Data, Out> {
-    PipeOutput(Out),
-    Visit((Url, Data)),
-}
-pub trait IntoNextAction<Data, Out>
-where
-    Out: WebsiteOutput,
-{
-    fn into_next_action(self) -> NextAction<Data, Out>;
+#[derive(PartialEq, Eq, Debug)]
+pub struct NextUrl<Data> {
+    pub(crate) url: Url,
+    pub(crate) data: Data,
 }
 
-impl<Data, Out> IntoNextAction<Data, Out> for (Url, Data)
-where
-    Out: WebsiteOutput,
-{
-    fn into_next_action(self) -> NextAction<Data, Out> {
-        NextAction::Visit(self)
+impl<Data> NextUrl<Data> {
+    fn new(url: Url, data: Data) -> Self {
+        Self { url, data }
     }
 }
 
-impl<Data, Out> IntoNextAction<Data, Out> for Url
+#[derive(PartialEq, Eq, Debug)]
+pub enum NextAction<Data, Out> {
+    PipeOutput(Out),
+    Visit(NextUrl<Data>),
+}
+
+impl<Data, Out> IntoNextActionVec<Data, Out> for NextUrl<Data>
+where
+    Out: WebsiteOutput,
+{
+    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+        vec![NextAction::Visit(self)]
+    }
+}
+
+impl<Data, Out> IntoNextActionVec<Data, Out> for Url
 where
     Data: Default,
     Out: WebsiteOutput,
 {
-    fn into_next_action(self) -> NextAction<Data, Out> {
-        NextAction::Visit((self, Default::default()))
+    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+        vec![NextAction::Visit(NextUrl::new(self, Default::default()))]
     }
 }
 
-impl<Data, Out> IntoNextAction<Data, Out> for Out
+impl<Data, Out> IntoNextActionVec<Data, Out> for Out
 where
     Out: WebsiteOutput,
 {
-    fn into_next_action(self) -> NextAction<Data, Out> {
-        NextAction::PipeOutput(self)
+    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+        vec![NextAction::PipeOutput(self)]
     }
 }
 
@@ -52,28 +59,62 @@ where
     fn into_next_action_vec(self) -> NextActionVector<Data, Out>;
 }
 
-auto trait NotVector {}
-
-impl<T> !NotVector for Vec<T> {}
-
 impl<Data, Out, T> IntoNextActionVec<Data, Out> for Vec<T>
 where
-    T: IntoNextAction<Data, Out>,
+    T: IntoNextActionVec<Data, Out>,
     Out: WebsiteOutput,
 {
     fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
         self.into_iter()
-            .map(IntoNextAction::into_next_action)
+            .map(IntoNextActionVec::into_next_action_vec)
+            .flatten()
             .collect()
     }
 }
 
-impl<Data, Out, T> IntoNextActionVec<Data, Out> for T
-where
-    T: IntoNextAction<Data, Out> + NotVector,
-    Out: WebsiteOutput,
-{
-    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
-        vec![self.into_next_action()]
+macro_rules! impl_into_response {
+    (
+        [$($ty:ident),*]
+    ) => {
+        #[allow(non_snake_case)]
+        impl<Data, Out, $($ty,)*> IntoNextActionVec<Data, Out> for ($($ty),*,)
+        where
+            Out: WebsiteOutput,
+            $( $ty: IntoNextActionVec<Data, Out>, )*
+        {
+            fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+                let ($($ty),*,) = self;
+
+                let parts = vec![$(
+                    $ty.into_next_action_vec(),
+                )*];
+
+                parts.into_iter().flatten().collect()
+            }
+        }
+
     }
 }
+#[rustfmt::skip]
+macro_rules! all_the_tuples {
+    ($name:ident) => {
+        $name!([T1]);
+        $name!([T1, T2]);
+        $name!([T1, T2, T3]);
+        $name!([T1, T2, T3, T4]);
+        $name!([T1, T2, T3, T4, T5]);
+        $name!([T1, T2, T3, T4, T5, T6]);
+        $name!([T1, T2, T3, T4, T5, T6, T7]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16]);
+    };
+}
+
+all_the_tuples!(impl_into_response);

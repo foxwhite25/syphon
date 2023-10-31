@@ -3,15 +3,14 @@ use std::{marker::PhantomData, pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use futures::{future::BoxFuture, Future};
 
-
 use crate::{
     next_action::{IntoNextActionVec, NextActionVector, WebsiteOutput},
     response::{FromResponse, Response},
 };
 
 pub(crate) trait HandlerWrapper<Data, Out> {
-    fn handle<'a>(
-        &'a self,
+    fn handle(
+        &self,
         resp: Arc<Response>,
         data: Data,
     ) -> BoxFuture<'static, NextActionVector<Data, Out>>;
@@ -19,12 +18,12 @@ pub(crate) trait HandlerWrapper<Data, Out> {
 
 impl<H, T, Data, Out> HandlerWrapper<Data, Out> for HandlerBox<H, T, Data, Out>
 where
-    Data: Send + Sync,
-    H: Handler<T, Data, Out> + Send + Sync + 'static,
+    Data: Send,
+    H: Handler<T, Data, Out> + Send + 'static,
     Data: 'static,
 {
-    fn handle<'a>(
-        &'a self,
+    fn handle(
+        &self,
         resp: Arc<Response>,
         data: Data,
     ) -> BoxFuture<'static, NextActionVector<Data, Out>> {
@@ -73,27 +72,6 @@ where
         Box::pin(async move { self().await.into_next_action_vec() })
     }
 }
-#[rustfmt::skip]
-macro_rules! all_the_tuples {
-    ($name:ident) => {
-        $name!([T1]);
-        $name!([T1, T2]);
-        $name!([T1, T2, T3]);
-        $name!([T1, T2, T3, T4]);
-        $name!([T1, T2, T3, T4, T5]);
-        $name!([T1, T2, T3, T4, T5, T6]);
-        $name!([T1, T2, T3, T4, T5, T6, T7]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15]);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16]);
-    };
-}
 
 macro_rules! impl_handler {
     (
@@ -128,6 +106,27 @@ macro_rules! impl_handler {
     };
 }
 
+#[rustfmt::skip]
+macro_rules! all_the_tuples {
+    ($name:ident) => {
+        $name!([T1]);
+        $name!([T1, T2]);
+        $name!([T1, T2, T3]);
+        $name!([T1, T2, T3, T4]);
+        $name!([T1, T2, T3, T4, T5]);
+        $name!([T1, T2, T3, T4, T5, T6]);
+        $name!([T1, T2, T3, T4, T5, T6, T7]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16]);
+    };
+}
 all_the_tuples!(impl_handler);
 
 #[cfg(test)]
@@ -137,6 +136,7 @@ mod test {
     use crate::{
         extractor::{Data, Json, SearchSelectors, Selector},
         handler::Handler,
+        next_action::{NextAction, WebsiteOutput},
         response::Response,
     };
     use serde::Deserialize;
@@ -145,13 +145,19 @@ mod test {
     struct Target {
         name: String,
     }
-
+    #[derive(PartialEq, Eq, Debug)]
     struct D {
         bar: String,
     }
-
+    #[derive(PartialEq, Eq, Debug)]
     struct Out {
         foo_bar: String,
+    }
+
+    impl WebsiteOutput for Out {
+        fn should_process(&self) -> bool {
+            true
+        }
     }
 
     #[tokio::test]
@@ -162,19 +168,23 @@ mod test {
             }
         }
 
-        let out: Out = Handler::handle(
+        let out = Handler::handle(
             foo,
-            &Response {
+            Arc::new(Response {
                 bytes: br#"{"name": "foo"}"#.to_vec(),
-            },
+            }),
             Arc::new(D {
                 bar: "bar".to_string(),
             }),
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert_eq!(out.foo_bar, "foobar");
+        assert_eq!(
+            out[0],
+            NextAction::PipeOutput(Out {
+                foo_bar: "foobar".to_string()
+            })
+        );
 
         #[derive(SearchSelectors)]
         struct Target2 {
@@ -189,16 +199,16 @@ mod test {
             unreachable!()
         }
 
-        let out: Option<Out> = Handler::handle(
+        let out = Handler::handle(
             should_not_run,
-            &Response {
+            Arc::new(Response {
                 bytes: br#"{"name": "foo"}"#.to_vec(),
-            },
+            }),
             Arc::new(D {
                 bar: "bar".to_string(),
             }),
         )
         .await;
-        assert!(out.is_none())
+        assert!(out.is_empty())
     }
 }

@@ -1,37 +1,27 @@
-use std::collections::HashMap;
-
-
-use uuid::Uuid;
-
-use crate::{
-    website::Website,
-};
+use crate::website::WebsiteWrapper;
 
 pub trait OutputProcessor<Out> {
-    async fn process(&mut self, out: Out) -> ();
+    async fn process(&mut self, out: Out);
 }
 
-pub struct Client<Data: Clone, Out, OP: OutputProcessor<Out>> {
-    data: Data,
-    websites: HashMap<Uuid, Website<Data, Out>>,
+pub struct Client<Out, OP: OutputProcessor<Out>> {
+    websites: Vec<Box<dyn WebsiteWrapper<Out>>>,
     output_processor: OP,
 }
 
-impl<Data, Out, OP> Client<Data, Out, OP>
+impl<Out, OP> Client<Out, OP>
 where
-    Data: Clone + Send + Sync + 'static,
     Out: 'static,
     OP: OutputProcessor<Out>,
 {
-    pub fn new(data: Data, op: OP) -> Self {
+    pub fn new(op: OP) -> Self {
         Self {
-            data: data,
             websites: Default::default(),
             output_processor: op,
         }
     }
 
-    pub fn handle_website<T: Into<Website<Data, Out>>>(&mut self, t: T) {
-        self.websites.insert(Uuid::new_v4(), t.into());
+    pub fn handle_website<T: WebsiteWrapper<Out> + 'static>(&mut self, t: T) {
+        self.websites.push(Box::new(t));
     }
 }

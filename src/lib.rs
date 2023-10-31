@@ -11,6 +11,9 @@ mod next_action;
 mod response;
 mod website;
 
+#[macro_use]
+pub(crate) mod macros;
+
 #[cfg(feature = "extractor")]
 mod extractor;
 
