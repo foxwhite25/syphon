@@ -7,4 +7,6 @@ pub type Result<T> = StdResult<T, Error>;
 pub enum Error {
     #[error("json serde encountered a unexpected token")]
     JsonError(#[from] serde_json::Error),
+    #[error("reqwest error")]
+    ReqwestError(#[from] reqwest::Error),
 }

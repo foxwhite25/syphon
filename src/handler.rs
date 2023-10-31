@@ -1,50 +1,50 @@
-use std::{marker::PhantomData, thread};
+use std::{marker::PhantomData, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{future::BoxFuture, Future};
 
-use crate::response::{FromResponse, Response};
 
-pub(crate) trait HandlerWrapper<Data> {
-    type Output;
+use crate::{
+    next_action::{IntoNextActionVec, NextActionVector, WebsiteOutput},
+    response::{FromResponse, Response},
+};
 
-    fn handle<'a, 'b>(
+pub(crate) trait HandlerWrapper<Data, Out> {
+    fn handle<'a>(
         &'a self,
-        resp: &'b Response,
+        resp: Arc<Response>,
         data: Data,
-    ) -> BoxFuture<'b, Option<Self::Output>>;
+    ) -> BoxFuture<'static, NextActionVector<Data, Out>>;
 }
 
-impl<H, T, Data> HandlerWrapper<Data> for HandlerBox<H, T, Data>
+impl<H, T, Data, Out> HandlerWrapper<Data, Out> for HandlerBox<H, T, Data, Out>
 where
     Data: Send + Sync,
-    H: Handler<T, Data> + Send + Sync + 'static,
+    H: Handler<T, Data, Out> + Send + Sync + 'static,
     Data: 'static,
 {
-    type Output = H::Output;
-
-    fn handle<'a, 'b>(
+    fn handle<'a>(
         &'a self,
-        resp: &'b Response,
+        resp: Arc<Response>,
         data: Data,
-    ) -> BoxFuture<'b, Option<Self::Output>> {
+    ) -> BoxFuture<'static, NextActionVector<Data, Out>> {
         let fut = self.inner.clone();
         let fut = async move { fut.handle(resp, data).await };
         Box::pin(fut)
     }
 }
 
-pub(crate) struct HandlerBox<H, T, Data>
+pub(crate) struct HandlerBox<H, T, Data, Out>
 where
-    H: Handler<T, Data> + Send,
+    H: Handler<T, Data, Out> + Send,
 {
     inner: H,
-    _marker: PhantomData<fn() -> (T, Data)>,
+    _marker: PhantomData<fn() -> (T, Data, Out)>,
 }
 
-impl<H, T, Data> HandlerBox<H, T, Data>
+impl<H, T, Data, Out> HandlerBox<H, T, Data, Out>
 where
-    H: Handler<T, Data> + Send,
+    H: Handler<T, Data, Out> + Send,
 {
     pub(crate) fn from_handler(h: H) -> Self {
         Self {
@@ -54,27 +54,25 @@ where
     }
 }
 
-#[async_trait]
-pub trait Handler<T, Data>: Clone + Send + Sized {
-    type Output;
-
-    async fn handle(self, resp: &Response, data: Data) -> Option<Self::Output>;
+pub trait Handler<T, Data, Out>: Send + Clone {
+    type Future: Future<Output = NextActionVector<Data, Out>> + Send + 'static;
+    fn handle(self, resp: Arc<Response>, data: Data) -> Self::Future;
 }
 
-#[async_trait]
-impl<F, Fut, Data, Out> Handler<(), Data> for F
+impl<F, Fut, FutOut, Data, Out> Handler<(), Data, Out> for F
 where
-    F: FnOnce() -> Fut + Send + Sync + 'static + Clone,
-    Fut: Future<Output = Out> + Send,
-    Data: Send + Sync + 'static,
+    F: FnOnce() -> Fut + Send + Clone + 'static,
+    Fut: Future<Output = FutOut> + Send,
+    FutOut: IntoNextActionVec<Data, Out>,
+    Out: WebsiteOutput + 'static,
+    Data: 'static,
 {
-    type Output = Out;
+    type Future = Pin<Box<dyn Future<Output = NextActionVector<Data, Out>> + Send>>;
 
-    async fn handle(self, _resp: &Response, _data: Data) -> Option<Self::Output> {
-        Some(self().await.into())
+    fn handle(self, _resp: Arc<Response>, _data: Data) -> Self::Future {
+        Box::pin(async move { self().await.into_next_action_vec() })
     }
 }
-
 #[rustfmt::skip]
 macro_rules! all_the_tuples {
     ($name:ident) => {
@@ -103,21 +101,28 @@ macro_rules! impl_handler {
     ) => {
         #[allow(non_snake_case, unused_mut)]
         #[async_trait]
-        impl<F, Fut, Data, Out, $($ty,)*> Handler<($($ty,)*), Data> for F
+        impl<F, Fut, FutOut, Data, Out, $($ty,)*> Handler<($($ty,)*), Data, Out> for F
         where
-            F: FnOnce($($ty,)*) -> Fut + Send + Sync + 'static + Clone,
-            Fut: Future<Output = Out> + Send,
-            Data: Send + Sync + 'static,
+            F: FnOnce($($ty,)*) -> Fut + Clone + Send + 'static,
+            Fut: Future<Output = FutOut> + Send,
+            FutOut: IntoNextActionVec<Data, Out>,
+            Out: WebsiteOutput + 'static,
+            Data: 'static + Send + Sync,
             $( $ty: FromResponse<Data> + Send, )*
         {
-            type Output = Out;
+            type Future = Pin<Box<dyn Future<Output = NextActionVector<Data, Out>> + Send>>;
 
-            async fn handle(self, resp: &Response, data: Data) -> Option<Out> {
-                let data = data;
-                $(
-                    let $ty = $ty::from_response(resp, &data).await?;
-                )*
-                Some(self($($ty,)*).await.into())
+            fn handle(self, resp: Arc<Response>, data: Data) -> Self::Future {
+                Box::pin(async move {
+                    let data = data;
+                    $(
+                        let $ty = match $ty::from_response(resp.as_ref(), &data).await {
+                            Some($ty) => $ty,
+                            _ => { return Vec::new() }
+                        };
+                    )*
+                    self($($ty,)*).await.into_next_action_vec()
+                })
             }
         }
     };

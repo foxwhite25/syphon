@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 
-use crate::error::Result;
+use reqwest::Response as ReqwestResponse;
+
+use crate::error::{self, Result};
 
 #[derive(Clone)]
 pub struct Response {
@@ -9,6 +11,12 @@ pub struct Response {
 }
 
 impl Response {
+    pub(crate) async fn from_reqwest(value: ReqwestResponse) -> error::Result<Self> {
+        Ok(Self {
+            bytes: value.bytes().await?.to_vec(),
+        })
+    }
+
     pub fn json<T: DeserializeOwned>(&self) -> Result<T> {
         serde_json::from_slice(&self.bytes).map_err(|err| err.into())
     }

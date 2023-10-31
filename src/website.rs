@@ -1,23 +1,23 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{Arc};
 
 use futures::{
     future::join_all,
-    stream::{FuturesUnordered, StreamExt},
+    stream::{StreamExt},
 };
 use reqwest::Url;
 use tokio::{
-    select,
-    sync::{mpsc, RwLock},
+    sync::{mpsc},
     task::JoinHandle,
 };
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     handler::{Handler, HandlerBox, HandlerWrapper},
+    next_action::{NextAction, NextActionVector},
     response::Response,
 };
 
-type Handle<Data, Out> = Vec<Box<dyn HandlerWrapper<Data, Output = Out> + Send + Sync>>;
+type Handle<Data, Out> = Vec<Box<dyn HandlerWrapper<Data, Out> + Send + Sync>>;
 
 pub struct WebsiteBuilder<Data, Out> {
     starting_urls: &'static [&'static str],
@@ -28,6 +28,7 @@ pub struct WebsiteBuilder<Data, Out> {
 impl<Data, Out> WebsiteBuilder<Data, Out>
 where
     Data: Send + Sync + 'static,
+    Out: 'static,
 {
     pub fn parallel_limit(mut self, limit: usize) -> Self {
         self.parallel_limit = limit;
@@ -37,7 +38,7 @@ where
     pub async fn handle<T, H>(mut self, handler: H) -> Self
     where
         T: 'static,
-        H: Handler<T, Data, Output = Out> + Send + Sync + 'static,
+        H: Handler<T, Data, Out> + Send + Sync + 'static,
     {
         let wrapper = HandlerBox::from_handler(handler);
         self.handler.push(Box::new(wrapper));
@@ -50,7 +51,6 @@ pub struct Website<Data, Out> {
     parallel_limit: usize,
     handler: Arc<Handle<Data, Out>>,
     join_handler: Option<JoinHandle<()>>,
-    sender: Option<mpsc::Sender<(Url, Data)>>,
 }
 
 impl<Data, Out> Website<Data, Out>
@@ -58,39 +58,56 @@ where
     Data: Send + Sync + 'static + Clone,
     Out: Send + 'static,
 {
-    async fn _worker(url: Url, data: Data, handler: Arc<Handle<Data, Out>>) -> Vec<Out> {
-        let resp = Response {
-            bytes: b"foo".to_vec(),
-        };
+    async fn _worker(
+        url: Url,
+        data: Data,
+        handler: Arc<Handle<Data, Out>>,
+    ) -> NextActionVector<Data, Out> {
+        let Ok(resp) = reqwest::get(url).await else {
+            return Vec::new();
+        }; // TODO: Error Handling
+
+        let Ok(resp) = Response::from_reqwest(resp).await else {
+            return Vec::new();
+        }; // TODO: Same as above
+        let resp = Arc::new(resp);
+
         let handlers = handler.iter().map(|handler| {
             let data = data.clone();
-            handler.handle(&resp, data)
+            let resp = resp.clone();
+            handler.handle(resp, data)
         });
-        join_all(handlers)
-            .await
-            .into_iter()
-            .filter_map(|out| out)
-            .collect()
+        join_all(handlers).await.into_iter().flatten().collect()
     }
 
     async fn _fetcher(
         parallel_limit: usize,
+        cx: mpsc::Sender<(Url, Data)>,
         rx: mpsc::Receiver<(Url, Data)>,
         handlers: Arc<Handle<Data, Out>>,
         output_sender: mpsc::Sender<Out>,
     ) {
-        let stream: ReceiverStream<_> = rx.into();
-        stream
+        let rec_stream: ReceiverStream<_> = rx.into();
+        rec_stream
             .map(|(url, data)| {
                 let handlers = handlers.clone();
                 Self::_worker(url, data, handlers)
             })
             .buffer_unordered(parallel_limit)
-            .for_each(|out| {
+            .for_each(|actions| {
                 let output_sender = output_sender.clone();
+                let cx = cx.clone();
                 async move {
-                    let o = out.into_iter().map(|out| output_sender.send(out));
-                    join_all(o).await;
+                    for next_action in actions {
+                        match next_action {
+                            NextAction::PipeOutput(output) => {
+                                output_sender.send(output).await;
+                            }
+                            NextAction::Visit(pair) => {
+                                cx.send(pair).await;
+                            }
+                        }
+                    }
                 }
             })
             .await;
@@ -106,18 +123,10 @@ where
 
     pub(crate) fn start(&mut self, output_sender: mpsc::Sender<Out>) {
         let (cx, rx) = mpsc::channel(self.parallel_limit);
-        self.sender = Some(cx);
         let handlers = self.handler.clone();
         let parallel = self.parallel_limit;
         self.join_handler = Some(tokio::spawn(async move {
-            Self::_fetcher(parallel, rx, handlers, output_sender).await
+            Self::_fetcher(parallel, cx, rx, handlers, output_sender).await
         }))
-    }
-
-    pub(crate) async fn visit(&self, url: Url, data: Data) {
-        let Some(ref sender) = self.sender else {
-            return;
-        };
-        sender.send((url, data)).await.unwrap()
     }
 }
