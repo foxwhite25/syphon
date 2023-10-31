@@ -1,6 +1,9 @@
 use std::{process::Output, sync::Arc};
 
-use futures::{future::join_all, stream::StreamExt};
+use futures::{
+    future::join_all,
+    stream::{self, StreamExt},
+};
 use reqwest::Url;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::ReceiverStream;
@@ -14,7 +17,7 @@ use crate::{
 type Handle<Data, Out> = Vec<Box<dyn HandlerWrapper<Data, Out> + Send + Sync>>;
 
 pub struct WebsiteBuilder<Data, Out> {
-    starting_urls: &'static [&'static str],
+    starting_urls: Vec<Url>,
     parallel_limit: usize,
     handler: Handle<Data, Out>,
 }
@@ -29,7 +32,12 @@ where
         self
     }
 
-    pub async fn handle<T, H>(mut self, handler: H) -> Self
+    pub fn start_with(mut self, url: Url) -> Self {
+        self.starting_urls.push(url);
+        self
+    }
+
+    pub fn handle<T, H>(mut self, handler: H) -> Self
     where
         T: 'static,
         H: Handler<T, Data, Out> + Send + Sync + 'static,
@@ -43,7 +51,7 @@ where
 impl<Data, Out> Into<Website<Data, Out>> for WebsiteBuilder<Data, Out> {
     fn into(self) -> Website<Data, Out> {
         Website {
-            starting_urls: self.starting_urls,
+            starting_urls: Arc::new(self.starting_urls),
             parallel_limit: self.parallel_limit,
             handler: Arc::from(self.handler),
             join_handler: None,
@@ -53,7 +61,7 @@ impl<Data, Out> Into<Website<Data, Out>> for WebsiteBuilder<Data, Out> {
 }
 
 pub struct Website<Data, Out> {
-    starting_urls: &'static [&'static str],
+    starting_urls: Arc<Vec<Url>>,
     parallel_limit: usize,
     handler: Arc<Handle<Data, Out>>,
     join_handler: Option<JoinHandle<()>>,
@@ -61,9 +69,9 @@ pub struct Website<Data, Out> {
 }
 
 impl<Data, Out> Website<Data, Out> {
-    pub fn new(starting_urls: &'static [&'static str]) -> WebsiteBuilder<Data, Out> {
+    pub fn new() -> WebsiteBuilder<Data, Out> {
         WebsiteBuilder {
-            starting_urls,
+            starting_urls: Default::default(),
             parallel_limit: 16,
             handler: Default::default(),
         }
@@ -78,7 +86,7 @@ pub trait WebsiteWrapper<Output> {
 
 impl<Data> WebsiteWrapper<Output> for Website<Data, Output>
 where
-    Data: Clone + Send + Sync + 'static,
+    Data: Clone + Send + Sync + 'static + Default,
 {
     fn init(&mut self, output_sender: mpsc::Sender<Output>) {
         let (cx, rx) = mpsc::channel(self.parallel_limit * 4);
@@ -90,7 +98,22 @@ where
         }))
     }
 
-    fn launch(&self) {}
+    fn launch(&self) {
+        let Some(sender) = self.sender.clone() else {
+            return;
+        };
+        let starting_urls = self.starting_urls.clone();
+        tokio::spawn(async move {
+            for ele in starting_urls.iter() {
+                let _ = sender
+                    .send(NextUrl {
+                        url: ele.clone(),
+                        data: Default::default(),
+                    })
+                    .await;
+            }
+        });
+    }
 }
 
 async fn _worker<Data, Out>(
