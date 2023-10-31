@@ -159,7 +159,7 @@ mod test {
 
         let out: Out = Handler::handle(
             foo,
-            Response {
+            &Response {
                 bytes: br#"{"name": "foo"}"#.to_vec(),
             },
             Arc::new(D {
@@ -186,7 +186,7 @@ mod test {
 
         let out: Option<Out> = Handler::handle(
             should_not_run,
-            Response {
+            &Response {
                 bytes: br#"{"name": "foo"}"#.to_vec(),
             },
             Arc::new(D {
