@@ -5,8 +5,8 @@ use futures::{
     stream::{self, StreamExt},
 };
 use hashbrown::HashSet;
-use log::{debug, error};
-use reqwest::Url;
+use log::{debug, error, warn};
+use reqwest::{Method, Request, Url};
 use tokio::{
     sync::{mpsc, Mutex, Semaphore},
     task::JoinHandle,
@@ -14,6 +14,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
+    client,
     handler::{Handler, HandlerBox, HandlerWrapper},
     next_action::{NextAction, NextActionVector, NextUrl},
     response::Response,
@@ -72,7 +73,7 @@ pub struct Website<Data, Out> {
     handler: Arc<Handle<Data, Out>>,
     join_handler: Option<JoinHandle<()>>,
     sender: Option<mpsc::Sender<NextUrl<Data>>>,
-    duplicate: Arc<Mutex<HashSet<Url>>>,
+    duplicate: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<Data, Out> Website<Data, Out> {
@@ -132,11 +133,12 @@ async fn _worker<Data, Out>(
     url: Url,
     data: Data,
     handler: Arc<Handle<Data, Out>>,
+    client: reqwest::Client,
 ) -> NextActionVector<Data, Out>
 where
     Data: Clone,
 {
-    let Ok(resp) = reqwest::get(url).await else {
+    let Ok(resp) = client.execute(Request::new(Method::GET, url)).await else {
             return Vec::new();
         }; // TODO: Error Handling/Expo. Backoff
 
@@ -159,23 +161,25 @@ async fn _fetcher<Data, Out>(
     mut rx: mpsc::Receiver<NextUrl<Data>>,
     handlers: Arc<Handle<Data, Out>>,
     output_sender: mpsc::Sender<Out>,
-    duplicate: Arc<Mutex<HashSet<Url>>>,
+    duplicate: Arc<Mutex<HashSet<String>>>,
 ) where
     Data: Clone + Debug + Send + Sync + 'static,
     Out: Debug + Send + 'static,
 {
     let sem = Arc::new(Semaphore::new(parallel_limit));
+    let client = reqwest::Client::builder().build().unwrap();
     while let Some(next) = rx.recv().await {
         let handlers = handlers.clone();
         let output_sender = output_sender.clone();
         let cx = cx.clone();
         let sem = sem.clone();
         let duplicate = duplicate.clone();
+        let client = client.clone();
         tokio::spawn(async move {
-            if let Err(_) = sem.acquire().await {
+            let Ok(permit) = sem.acquire_owned().await else {
                 return;
             };
-            let actions = _worker(next.url, next.data, handlers).await;
+            let actions = _worker(next.url, next.data, handlers, client).await;
             for next_action in actions {
                 debug!("next action: {:?}", next_action);
                 match next_action {
@@ -188,10 +192,10 @@ async fn _fetcher<Data, Out>(
                     NextAction::Visit(pair) => {
                         {
                             let mut lock = duplicate.lock().await;
-                            if lock.get(&pair.url).is_some() {
+                            if lock.get(pair.url.path()).is_some() {
                                 continue;
                             }
-                            lock.insert(pair.url.clone());
+                            lock.insert(pair.url.path().to_string());
                         }
                         cx.send(pair)
                             .await
@@ -199,6 +203,7 @@ async fn _fetcher<Data, Out>(
                     }
                 }
             }
+            drop(permit)
         });
     }
 }
