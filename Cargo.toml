@@ -19,6 +19,11 @@ pin-project-lite = "0.2.13"
 uuid = { version = "1.5.0", features = ["rand", "v4"] }
 rand = "0.8.5"
 tokio-stream = "0.1.14"
+log = "0.4.20"
+hashbrown = "0.14.2"
+
+[dev-dependencies]
+env_logger = "0.10.0"
 
 [features]
 default = ["serde", "extractor", "simd"]

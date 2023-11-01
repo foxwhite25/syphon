@@ -1,11 +1,16 @@
-use std::{process::Output, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 use futures::{
     future::join_all,
     stream::{self, StreamExt},
 };
+use hashbrown::HashSet;
+use log::{debug, error};
 use reqwest::Url;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, Mutex, Semaphore},
+    task::JoinHandle,
+};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
@@ -56,6 +61,7 @@ impl<Data, Out> Into<Website<Data, Out>> for WebsiteBuilder<Data, Out> {
             handler: Arc::from(self.handler),
             join_handler: None,
             sender: None,
+            duplicate: Default::default(),
         }
     }
 }
@@ -66,6 +72,7 @@ pub struct Website<Data, Out> {
     handler: Arc<Handle<Data, Out>>,
     join_handler: Option<JoinHandle<()>>,
     sender: Option<mpsc::Sender<NextUrl<Data>>>,
+    duplicate: Arc<Mutex<HashSet<Url>>>,
 }
 
 impl<Data, Out> Website<Data, Out> {
@@ -84,17 +91,22 @@ pub trait WebsiteWrapper<Output> {
     fn launch(&self);
 }
 
-impl<Data> WebsiteWrapper<Output> for Website<Data, Output>
+impl<Data, Output> WebsiteWrapper<Output> for Website<Data, Output>
 where
-    Data: Clone + Send + Sync + 'static + Default,
+    Data: Clone + Send + 'static + Default + Sync + Debug,
+    Output: Send + 'static + Debug,
 {
     fn init(&mut self, output_sender: mpsc::Sender<Output>) {
         let (cx, rx) = mpsc::channel(self.parallel_limit * 4);
         let handlers = self.handler.clone();
         let parallel = self.parallel_limit;
+        let duplicate = self.duplicate.clone();
         self.sender = Some(cx.clone());
         self.join_handler = Some(tokio::spawn(async move {
-            _fetcher(parallel, cx, rx, handlers, output_sender).await
+            {
+                duplicate.lock().await.clear()
+            };
+            _fetcher(parallel, cx, rx, handlers, output_sender, duplicate).await
         }))
     }
 
@@ -126,7 +138,7 @@ where
 {
     let Ok(resp) = reqwest::get(url).await else {
             return Vec::new();
-        }; // TODO: Error Handling
+        }; // TODO: Error Handling/Expo. Backoff
 
     let Ok(resp) = Response::from_reqwest(resp).await else {
             return Vec::new();
@@ -144,34 +156,49 @@ where
 async fn _fetcher<Data, Out>(
     parallel_limit: usize,
     cx: mpsc::Sender<NextUrl<Data>>,
-    rx: mpsc::Receiver<NextUrl<Data>>,
+    mut rx: mpsc::Receiver<NextUrl<Data>>,
     handlers: Arc<Handle<Data, Out>>,
     output_sender: mpsc::Sender<Out>,
+    duplicate: Arc<Mutex<HashSet<Url>>>,
 ) where
-    Data: Clone,
+    Data: Clone + Debug + Send + Sync + 'static,
+    Out: Debug + Send + 'static,
 {
-    let rec_stream: ReceiverStream<_> = rx.into();
-    rec_stream
-        .map(|next_url| {
-            let handlers = handlers.clone();
-            _worker(next_url.url, next_url.data, handlers)
-        })
-        .buffer_unordered(parallel_limit)
-        .for_each(|actions| {
-            let output_sender = output_sender.clone();
-            let cx = cx.clone();
-            async move {
-                for next_action in actions {
-                    match next_action {
-                        NextAction::PipeOutput(output) => {
-                            let _ = output_sender.send(output).await;
+    let sem = Arc::new(Semaphore::new(parallel_limit));
+    while let Some(next) = rx.recv().await {
+        let handlers = handlers.clone();
+        let output_sender = output_sender.clone();
+        let cx = cx.clone();
+        let sem = sem.clone();
+        let duplicate = duplicate.clone();
+        tokio::spawn(async move {
+            if let Err(_) = sem.acquire().await {
+                return;
+            };
+            let actions = _worker(next.url, next.data, handlers).await;
+            for next_action in actions {
+                debug!("next action: {:?}", next_action);
+                match next_action {
+                    NextAction::PipeOutput(output) => {
+                        output_sender
+                            .send(output)
+                            .await
+                            .unwrap_or_else(|err| error!("output_sender send error: {}", err));
+                    }
+                    NextAction::Visit(pair) => {
+                        {
+                            let mut lock = duplicate.lock().await;
+                            if lock.get(&pair.url).is_some() {
+                                continue;
+                            }
+                            lock.insert(pair.url.clone());
                         }
-                        NextAction::Visit(pair) => {
-                            let _ = cx.send(pair).await;
-                        }
+                        cx.send(pair)
+                            .await
+                            .unwrap_or_else(|err| error!("next url send error: {}", err));
                     }
                 }
             }
-        })
-        .await;
+        });
+    }
 }

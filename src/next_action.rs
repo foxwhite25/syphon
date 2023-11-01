@@ -52,6 +52,22 @@ where
     }
 }
 
+impl<Data, Out> IntoNextActionVec<Data, Out> for Option<Out>
+where
+    Out: WebsiteOutput,
+{
+    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+        match self {
+            Some(out) => {
+                vec![NextAction::PipeOutput(out)]
+            }
+            None => {
+                vec![]
+            }
+        }
+    }
+}
+
 pub trait IntoNextActionVec<Data, Out>
 where
     Out: WebsiteOutput,

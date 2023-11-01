@@ -3,19 +3,19 @@
 #![feature(auto_traits)]
 #![allow(suspicious_auto_trait_impls)]
 
-mod client;
-mod context;
-mod error;
-mod handler;
-mod next_action;
-mod response;
-mod website;
+pub mod client;
+pub mod context;
+pub mod error;
+pub mod handler;
+pub mod next_action;
+pub mod response;
+pub mod website;
 
 #[macro_use]
 pub(crate) mod macros;
 
 #[cfg(feature = "extractor")]
-mod extractor;
+pub mod extractor;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right
