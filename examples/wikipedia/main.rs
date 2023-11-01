@@ -17,6 +17,7 @@ enum Context {
 #[derive(Debug)]
 struct Output {
     title: String,
+    language: usize,
 }
 
 impl WebsiteOutput for Output {
@@ -29,10 +30,20 @@ impl WebsiteOutput for Output {
 struct TitleExtractor {
     #[select(selector = "h1", text)]
     title: String,
+    #[select(selector = "#p-lang-btn-checkbox", attr = "aria-label")]
+    language_count: String,
 }
 
 async fn from_title(Selector(title): Selector<TitleExtractor>) -> Option<Output> {
-    Some(Output { title: title.title })
+    let language = title
+        .language_count
+        .split_ascii_whitespace()
+        .filter_map(|x| x.parse().ok())
+        .next()?;
+    Some(Output {
+        title: title.title,
+        language,
+    })
 }
 #[derive(Debug)]
 struct AnchorExtractor {
@@ -71,7 +82,7 @@ struct OP {}
 
 impl OutputProcessor<Output> for OP {
     async fn process(&mut self, out: Output) {
-        info!("{}", out.title)
+        info!("{:?}", out)
     }
 }
 
@@ -88,6 +99,7 @@ async fn main() {
             Url::parse("https://en.wikipedia.org/wiki/Special:Random")
                 .expect("Unable to parse starting Url"),
         )
+        .parallel_limit(64)
         .handle(from_title)
         .handle(visit_next_urls)
         .into();
