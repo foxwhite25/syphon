@@ -1,20 +1,15 @@
 use std::{fmt::Debug, sync::Arc};
 
-use futures::{
-    future::join_all,
-    stream::{self, StreamExt},
-};
+use futures::future::join_all;
 use hashbrown::HashSet;
-use log::{debug, error, warn};
+use log::{debug, error};
 use reqwest::{Method, Request, Url};
 use tokio::{
     sync::{mpsc, Mutex, Semaphore},
     task::JoinHandle,
 };
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    client,
     handler::{Handler, HandlerBox, HandlerWrapper},
     next_action::{NextAction, NextActionVector, NextUrl},
     response::Response,
@@ -54,12 +49,12 @@ where
     }
 }
 
-impl<Data, Out> Into<Website<Data, Out>> for WebsiteBuilder<Data, Out> {
-    fn into(self) -> Website<Data, Out> {
+impl<Data, Out> From<WebsiteBuilder<Data, Out>> for Website<Data, Out> {
+    fn from(val: WebsiteBuilder<Data, Out>) -> Self {
         Website {
-            starting_urls: Arc::new(self.starting_urls),
-            parallel_limit: self.parallel_limit,
-            handler: Arc::from(self.handler),
+            starting_urls: Arc::new(val.starting_urls),
+            parallel_limit: val.parallel_limit,
+            handler: Arc::from(val.handler),
             join_handler: None,
             sender: None,
             duplicate: Default::default(),
@@ -104,9 +99,7 @@ where
         let duplicate = self.duplicate.clone();
         self.sender = Some(cx.clone());
         self.join_handler = Some(tokio::spawn(async move {
-            {
-                duplicate.lock().await.clear()
-            };
+            duplicate.lock().await.clear();
             _fetcher(parallel, cx, rx, handlers, output_sender, duplicate).await
         }))
     }

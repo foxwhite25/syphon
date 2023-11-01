@@ -5,9 +5,9 @@ use reqwest::Url;
 use std::fmt::Debug;
 use syphon::client::{Client, OutputProcessor};
 use syphon::extractor::{Data, SearchSelectors, Selector, UrlExtractor};
-use syphon::next_action::{NextAction, NextUrl, WebsiteOutput};
+use syphon::next_action::WebsiteOutput;
 use syphon::website::Website;
-use tl::{parse_query_selector, Parser};
+use tl::parse_query_selector;
 
 #[derive(Default, Debug)]
 enum Context {

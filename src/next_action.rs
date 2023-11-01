@@ -82,8 +82,7 @@ where
 {
     fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
         self.into_iter()
-            .map(IntoNextActionVec::into_next_action_vec)
-            .flatten()
+            .flat_map(IntoNextActionVec::into_next_action_vec)
             .collect()
     }
 }

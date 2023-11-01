@@ -2,6 +2,8 @@
 #![feature(negative_impls)]
 #![feature(auto_traits)]
 #![allow(suspicious_auto_trait_impls)]
+#![allow(clippy::new_ret_no_self)]
+#![allow(clippy::type_complexity)]
 
 pub mod client;
 pub mod context;
