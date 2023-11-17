@@ -1,44 +1,44 @@
-use log::debug;
+use std::marker::PhantomData;
+
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::website::WebsiteWrapper;
+use crate::website::{WebsitePair, WebsiteWrapper};
 
-pub trait OutputProcessor<Out> {
-    async fn process(&mut self, out: Out);
+pub struct Client<Out, Websites>
+where
+    Websites: WebsiteWrapper<Out>,
+{
+    websites: Websites,
+    _marker: PhantomData<Out>,
 }
 
-pub struct Client<Out, OP: OutputProcessor<Out>> {
-    websites: Vec<Box<dyn WebsiteWrapper<Out>>>,
-    output_processor: OP,
-}
-
-impl<Out, OP> Client<Out, OP>
+impl<Out, Website> Client<Out, Website>
 where
     Out: 'static,
-    OP: OutputProcessor<Out>,
+    Website: WebsiteWrapper<Out>,
 {
-    pub fn new(op: OP) -> Self {
+    pub fn new(websites: Website) -> Self {
         Self {
-            websites: Default::default(),
-            output_processor: op,
+            websites,
+            _marker: Default::default(),
         }
     }
 
-    pub fn handle_website<T: WebsiteWrapper<Out> + 'static>(mut self, t: T) -> Self {
-        self.websites.push(Box::new(t));
-        self
+    pub fn handle_website<T: WebsiteWrapper<Out> + 'static>(
+        self,
+        t: T,
+    ) -> Client<Out, WebsitePair<T, Website, Out>> {
+        Client {
+            websites: self.websites.pair(t),
+            _marker: Default::default(),
+        }
     }
 
-    pub async fn serve(mut self) {
-        let (cx, mut rx) = mpsc::channel(16);
-        for ele in &mut self.websites {
-            let cx = cx.clone();
-            ele.init(cx);
-            ele.launch()
-        }
-        while let Some(output) = rx.recv().await {
-            debug!("rec output");
-            self.output_processor.process(output).await
-        }
+    pub fn stream(mut self) -> ReceiverStream<Out> {
+        let (cx, rx) = mpsc::channel(16);
+        self.websites.init(cx);
+        self.websites.launch();
+        rx.into()
     }
 }

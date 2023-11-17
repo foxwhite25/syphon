@@ -1,9 +1,10 @@
 #![feature(async_fn_in_trait)]
 
+use futures::StreamExt;
 use log::{debug, info};
 use reqwest::Url;
 use std::fmt::Debug;
-use syphon::client::{Client, OutputProcessor};
+use syphon::client::Client;
 use syphon::extractor::{Data, SearchSelectors, Selector, UrlExtractor};
 use syphon::next_action::WebsiteOutput;
 use syphon::website::Website;
@@ -78,14 +79,6 @@ async fn visit_next_urls(
         .collect()
 }
 
-struct OP {}
-
-impl OutputProcessor<Output> for OP {
-    async fn process(&mut self, out: Output) {
-        info!("{:?}", out)
-    }
-}
-
 #[tokio::main]
 async fn main() {
     env_logger::Builder::new()
@@ -104,5 +97,8 @@ async fn main() {
         .handle(visit_next_urls)
         .into();
 
-    Client::new(OP {}).handle_website(wikipedia).serve().await;
+    Client::new(wikipedia)
+        .stream()
+        .for_each(|x| async move { info!("{:?}", x) })
+        .await;
 }

@@ -6,15 +6,11 @@
 #![allow(clippy::type_complexity)]
 
 pub mod client;
-pub mod context;
 pub mod error;
 pub mod handler;
 pub mod next_action;
 pub mod response;
 pub mod website;
-
-#[macro_use]
-pub(crate) mod macros;
 
 #[cfg(feature = "extractor")]
 pub mod extractor;

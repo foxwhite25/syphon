@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
 use futures::future::join_all;
 use hashbrown::HashSet;
@@ -81,10 +81,38 @@ impl<Data, Out> Website<Data, Out> {
     }
 }
 
+pub struct WebsitePair<T1, T2, Out>(T1, T2, PhantomData<Out>)
+where
+    T1: WebsiteWrapper<Out>,
+    T2: WebsiteWrapper<Out>;
+
 pub trait WebsiteWrapper<Output> {
     fn init(&mut self, output_sender: mpsc::Sender<Output>);
 
     fn launch(&self);
+
+    fn pair<T: WebsiteWrapper<Output>>(self, other: T) -> WebsitePair<T, Self, Output>
+    where
+        Self: Sized,
+    {
+        WebsitePair(other, self, Default::default())
+    }
+}
+
+impl<Output, T1, T2> WebsiteWrapper<Output> for WebsitePair<T1, T2, Output>
+where
+    T1: WebsiteWrapper<Output>,
+    T2: WebsiteWrapper<Output>,
+{
+    fn init(&mut self, output_sender: mpsc::Sender<Output>) {
+        self.0.init(output_sender.clone());
+        self.1.init(output_sender)
+    }
+
+    fn launch(&self) {
+        self.0.launch();
+        self.1.launch()
+    }
 }
 
 impl<Data, Output> WebsiteWrapper<Output> for Website<Data, Output>
