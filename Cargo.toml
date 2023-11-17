@@ -11,7 +11,6 @@ reqwest = "0.11.22"
 serde = { version = "1.0.189", features = ["derive"], optional = true }
 serde_json = "1.0.107"
 thiserror = "1.0.50"
-tl = "0.7.7"
 tokio = { version = "1.33.0", features = ["full"] }
 syphon_macro = { path = "./syphon_macro" }
 async-trait = "0.1.74"
@@ -21,13 +20,13 @@ rand = "0.8.5"
 tokio-stream = "0.1.14"
 log = "0.4.20"
 hashbrown = "0.14.2"
+scraper = "0.18.1"
 
 [dev-dependencies]
 env_logger = "0.10.0"
 
 [features]
-default = ["serde", "extractor", "simd"]
+default = ["serde", "extractor"]
 full = ["serde", "extractor"]
 serde = ["serde/derive"]
 extractor = []
-simd = ["tl/simd"]
