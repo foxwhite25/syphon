@@ -1,20 +1,14 @@
 #![feature(async_fn_in_trait)]
 
 use futures::StreamExt;
-use log::{debug, info};
+use log::{debug, info, warn};
 use reqwest::Url;
 use std::fmt::Debug;
 use syphon::client::Client;
-use syphon::extractor::{Data, SearchSelectors, Selector, UrlExtractor};
+use syphon::extractor::{self, Context, SearchSelectors, Selector};
 use syphon::next_action::WebsiteOutput;
 use syphon::website::Website;
-use tl::parse_query_selector;
 
-#[derive(Default, Debug)]
-enum Context {
-    #[default]
-    Index,
-}
 #[derive(Debug)]
 struct Output {
     title: String,
@@ -27,11 +21,11 @@ impl WebsiteOutput for Output {
     }
 }
 
-#[derive(SearchSelectors)]
+#[derive(SearchSelectors, Debug)]
 struct TitleExtractor {
-    #[select(selector = "h1", text)]
+    #[select(sel = "h1", text)]
     title: String,
-    #[select(selector = "#p-lang-btn-checkbox", attr = "aria-label")]
+    #[select(sel = "#p-lang-btn-checkbox", attr = "aria-label")]
     language_count: String,
 }
 
@@ -40,37 +34,22 @@ async fn from_title(Selector(title): Selector<TitleExtractor>) -> Option<Output>
         .language_count
         .split_ascii_whitespace()
         .filter_map(|x| x.parse().ok())
-        .next()?;
+        .next()
+        .unwrap_or(0);
     Some(Output {
         title: title.title,
         language,
     })
 }
-#[derive(Debug)]
+#[derive(SearchSelectors, Debug)]
 struct AnchorExtractor {
+    #[select(sel = "#bodyContent a", attr = "href")]
     anchor: Vec<String>,
-}
-
-impl SearchSelectors for AnchorExtractor {
-    fn search(dom: &VDom) -> Option<Self> {
-        let parser = dom.parser();
-        let k = dom
-            .query_selector("a")?
-            .filter_map(|node| node.get(parser))
-            .filter_map(|node| node.as_tag())
-            .map(|tag| tag.attributes())
-            .filter_map(|attr| attr.get("href").flatten())
-            .map(|href| href.as_utf8_str().to_string())
-            .filter(|url| url.starts_with("/wiki/"))
-            .collect();
-        Some(Self { anchor: k })
-    }
 }
 
 async fn visit_next_urls(
     Selector(anchors): Selector<AnchorExtractor>,
-    Data(_): Data<()>,
-    UrlExtractor(url): UrlExtractor,
+    extractor::Url(url): extractor::Url,
 ) -> Vec<Url> {
     anchors
         .anchor
@@ -81,24 +60,21 @@ async fn visit_next_urls(
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Info)
-        .init();
-
-    debug!("{:?}", parse_query_selector("main#content a"));
+    env_logger::init();
 
     let wikipedia: Website<(), Output> = Website::new()
         .start_with(
             Url::parse("https://en.wikipedia.org/wiki/Special:Random")
                 .expect("Unable to parse starting Url"),
         )
-        .parallel_limit(64)
+        .parallel_limit(256)
         .handle(from_title)
         .handle(visit_next_urls)
         .into();
 
-    Client::new(wikipedia)
-        .stream()
-        .for_each(|x| async move { info!("{:?}", x) })
-        .await;
+    let mut stream = Client::handle(wikipedia).stream();
+
+    while let Some(o) = stream.next().await {
+        info!("{:?}", o)
+    }
 }

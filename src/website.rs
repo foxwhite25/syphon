@@ -15,17 +15,17 @@ use crate::{
     response::Response,
 };
 
-type Handle<Data, Out> = Vec<Box<dyn HandlerWrapper<Data, Out> + Send + Sync>>;
+type Handle<Ctx, Out> = Vec<Box<dyn HandlerWrapper<Ctx, Out> + Send + Sync>>;
 
-pub struct WebsiteBuilder<Data, Out> {
+pub struct WebsiteBuilder<Ctx, Out> {
     starting_urls: Vec<Url>,
     parallel_limit: usize,
-    handler: Handle<Data, Out>,
+    handler: Handle<Ctx, Out>,
 }
 
-impl<Data, Out> WebsiteBuilder<Data, Out>
+impl<Ctx, Out> WebsiteBuilder<Ctx, Out>
 where
-    Data: Send + 'static,
+    Ctx: Send + 'static,
     Out: 'static,
 {
     pub fn parallel_limit(mut self, limit: usize) -> Self {
@@ -41,7 +41,7 @@ where
     pub fn handle<T, H>(mut self, handler: H) -> Self
     where
         T: 'static,
-        H: Handler<T, Data, Out> + Send + Sync + 'static,
+        H: Handler<T, Ctx, Out> + Send + Sync + 'static,
     {
         let wrapper = HandlerBox::from_handler(handler);
         self.handler.push(Box::new(wrapper));
@@ -49,8 +49,8 @@ where
     }
 }
 
-impl<Data, Out> From<WebsiteBuilder<Data, Out>> for Website<Data, Out> {
-    fn from(val: WebsiteBuilder<Data, Out>) -> Self {
+impl<Ctx, Out> From<WebsiteBuilder<Ctx, Out>> for Website<Ctx, Out> {
+    fn from(val: WebsiteBuilder<Ctx, Out>) -> Self {
         Website {
             starting_urls: Arc::new(val.starting_urls),
             parallel_limit: val.parallel_limit,
@@ -62,17 +62,17 @@ impl<Data, Out> From<WebsiteBuilder<Data, Out>> for Website<Data, Out> {
     }
 }
 
-pub struct Website<Data, Out> {
+pub struct Website<Ctx, Out> {
     starting_urls: Arc<Vec<Url>>,
     parallel_limit: usize,
-    handler: Arc<Handle<Data, Out>>,
+    handler: Arc<Handle<Ctx, Out>>,
     join_handler: Option<JoinHandle<()>>,
-    sender: Option<mpsc::Sender<NextUrl<Data>>>,
+    sender: Option<mpsc::Sender<NextUrl<Ctx>>>,
     duplicate: Arc<Mutex<HashSet<String>>>,
 }
 
-impl<Data, Out> Website<Data, Out> {
-    pub fn new() -> WebsiteBuilder<Data, Out> {
+impl<Ctx, Out> Website<Ctx, Out> {
+    pub fn new() -> WebsiteBuilder<Ctx, Out> {
         WebsiteBuilder {
             starting_urls: Default::default(),
             parallel_limit: 16,
@@ -115,9 +115,9 @@ where
     }
 }
 
-impl<Data, Output> WebsiteWrapper<Output> for Website<Data, Output>
+impl<Ctx, Output> WebsiteWrapper<Output> for Website<Ctx, Output>
 where
-    Data: Clone + Send + 'static + Default + Sync + Debug,
+    Ctx: Clone + Send + 'static + Default + Sync + Debug,
     Output: Send + 'static + Debug,
 {
     fn init(&mut self, output_sender: mpsc::Sender<Output>) {
@@ -150,14 +150,14 @@ where
     }
 }
 
-async fn _worker<Data, Out>(
+async fn _worker<Ctx, Out>(
     url: Url,
-    data: Data,
-    handler: Arc<Handle<Data, Out>>,
+    data: Ctx,
+    handler: Arc<Handle<Ctx, Out>>,
     client: reqwest::Client,
-) -> NextActionVector<Data, Out>
+) -> NextActionVector<Ctx, Out>
 where
-    Data: Clone,
+    Ctx: Clone,
 {
     let Ok(resp) = client.execute(Request::new(Method::GET, url)).await else {
             return Vec::new();
@@ -176,15 +176,15 @@ where
     join_all(handlers).await.into_iter().flatten().collect()
 }
 
-async fn _fetcher<Data, Out>(
+async fn _fetcher<Ctx, Out>(
     parallel_limit: usize,
-    cx: mpsc::Sender<NextUrl<Data>>,
-    mut rx: mpsc::Receiver<NextUrl<Data>>,
-    handlers: Arc<Handle<Data, Out>>,
+    cx: mpsc::Sender<NextUrl<Ctx>>,
+    mut rx: mpsc::Receiver<NextUrl<Ctx>>,
+    handlers: Arc<Handle<Ctx, Out>>,
     output_sender: mpsc::Sender<Out>,
     duplicate: Arc<Mutex<HashSet<String>>>,
 ) where
-    Data: Clone + Debug + Send + Sync + 'static,
+    Ctx: Clone + Debug + Send + Sync + 'static,
     Out: Debug + Send + 'static,
 {
     let sem = Arc::new(Semaphore::new(parallel_limit));

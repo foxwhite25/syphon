@@ -10,11 +10,11 @@ pub trait SearchSelectors: Sized {
 pub struct Selector<T: SearchSelectors>(pub T);
 
 #[async_trait]
-impl<T, Data> FromResponse<Data> for Selector<T>
+impl<T, Ctx> FromResponse<Ctx> for Selector<T>
 where
     T: SearchSelectors,
 {
-    async fn from_response(resp: &Response, _data: &Data) -> Option<Self> {
+    async fn from_response(resp: &Response, _: &Ctx) -> Option<Self> {
         let dom = Html::parse_document(std::str::from_utf8(&resp.bytes).ok()?);
         T::search(&dom).map(|x| Self(x))
     }
@@ -41,6 +41,6 @@ mod test {
         let target = Target::search(&dom).unwrap();
         assert_eq!(target.target, vec!["Hello"]);
         assert_eq!(target.anchor, "/post");
-        assert_eq!(target.nothing, None);
+        assert_eq!(target.nothing, None)
     }
 }

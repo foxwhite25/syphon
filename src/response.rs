@@ -24,6 +24,6 @@ impl Response {
     }
 }
 #[async_trait]
-pub trait FromResponse<Data>: Sized {
-    async fn from_response(resp: &Response, data: &Data) -> Option<Self>;
+pub trait FromResponse<Ctx>: Sized {
+    async fn from_response(resp: &Response, ctx: &Ctx) -> Option<Self>;
 }

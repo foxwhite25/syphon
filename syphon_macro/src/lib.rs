@@ -88,11 +88,16 @@ impl TryFrom<HashMap<&str, &str>> for OutputVarience {
 impl OutputVarience {
     fn output(&self) -> proc_macro2::TokenStream {
         match self {
-            OutputVarience::Text => r#".map(|x| x.text().collect::<Vec<_>>().join("\n"))"#,
-            OutputVarience::Attr(_) => r#".filter_map(|x| x.attr("href").map(|s| s.to_string()))"#,
+            OutputVarience::Text => r#".map(|x| x.text().collect::<Vec<_>>().join("\n"))"#
+                .parse()
+                .unwrap(),
+            OutputVarience::Attr(attr) => format!(
+                r#".filter_map(|x| x.attr({}).map(|s| s.to_string()))"#,
+                attr
+            )
+            .parse()
+            .unwrap(),
         }
-        .parse()
-        .expect("failed to parse output varience")
     }
 }
 
@@ -194,7 +199,6 @@ impl<'src> Context<'src> {
         let field = self.fields;
         let struct_name = self.struct_name;
         quote!(
-            use std::str::FromStr;
             impl SearchSelectors for #struct_name {
                 fn search(dom: &scraper::Html) -> Option<Self> {
                     #(

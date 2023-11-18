@@ -1,13 +1,12 @@
 use async_trait::async_trait;
-use reqwest::Url;
 
 use crate::response::{FromResponse, Response};
 
-pub struct UrlExtractor(pub Url);
+pub struct Url(pub reqwest::Url);
 
 #[async_trait]
-impl<Data> FromResponse<Data> for UrlExtractor {
-    async fn from_response(resp: &Response, _data: &Data) -> Option<Self> {
+impl<Ctx> FromResponse<Ctx> for Url {
+    async fn from_response(resp: &Response, _: &Ctx) -> Option<Self> {
         Some(Self(resp.url.clone()))
     }
 }

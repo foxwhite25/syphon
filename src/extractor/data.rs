@@ -2,14 +2,14 @@ use async_trait::async_trait;
 
 use crate::response::{FromResponse, Response};
 
-pub struct Data<D>(pub D);
+pub struct Context<Ctx>(pub Ctx);
 
 #[async_trait]
-impl<InnerData, OuterData> FromResponse<OuterData> for Data<InnerData>
+impl<InnerCtx, OuterCtx> FromResponse<OuterCtx> for Context<InnerCtx>
 where
-    OuterData: Clone + Into<InnerData> + 'static + Sync,
+    OuterCtx: Clone + Into<InnerCtx> + 'static + Sync,
 {
-    async fn from_response(_resp: &Response, data: &OuterData) -> Option<Self> {
+    async fn from_response(_resp: &Response, data: &OuterCtx) -> Option<Self> {
         Some(Self(data.clone().into()))
     }
 }

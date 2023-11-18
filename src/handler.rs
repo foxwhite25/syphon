@@ -8,42 +8,42 @@ use crate::{
     response::{FromResponse, Response},
 };
 
-pub(crate) trait HandlerWrapper<Data, Out> {
+pub(crate) trait HandlerWrapper<Ctx, Out> {
     fn handle(
         &self,
         resp: Arc<Response>,
-        data: Data,
-    ) -> BoxFuture<'static, NextActionVector<Data, Out>>;
+        ctx: Ctx,
+    ) -> BoxFuture<'static, NextActionVector<Ctx, Out>>;
 }
 
-impl<H, T, Data, Out> HandlerWrapper<Data, Out> for HandlerBox<H, T, Data, Out>
+impl<H, T, Ctx, Out> HandlerWrapper<Ctx, Out> for HandlerBox<H, T, Ctx, Out>
 where
-    Data: Send,
-    H: Handler<T, Data, Out> + Send + 'static,
-    Data: 'static,
+    Ctx: Send,
+    H: Handler<T, Ctx, Out> + Send + 'static,
+    Ctx: 'static,
 {
     fn handle(
         &self,
         resp: Arc<Response>,
-        data: Data,
-    ) -> BoxFuture<'static, NextActionVector<Data, Out>> {
+        ctx: Ctx,
+    ) -> BoxFuture<'static, NextActionVector<Ctx, Out>> {
         let fut = self.inner.clone();
-        let fut = async move { fut.handle(resp, data).await };
+        let fut = async move { fut.handle(resp, ctx).await };
         Box::pin(fut)
     }
 }
 
-pub(crate) struct HandlerBox<H, T, Data, Out>
+pub(crate) struct HandlerBox<H, T, Ctx, Out>
 where
-    H: Handler<T, Data, Out> + Send,
+    H: Handler<T, Ctx, Out> + Send,
 {
     inner: H,
-    _marker: PhantomData<fn() -> (T, Data, Out)>,
+    _marker: PhantomData<fn() -> (T, Ctx, Out)>,
 }
 
-impl<H, T, Data, Out> HandlerBox<H, T, Data, Out>
+impl<H, T, Ctx, Out> HandlerBox<H, T, Ctx, Out>
 where
-    H: Handler<T, Data, Out> + Send,
+    H: Handler<T, Ctx, Out> + Send,
 {
     pub(crate) fn from_handler(h: H) -> Self {
         Self {
@@ -53,22 +53,22 @@ where
     }
 }
 
-pub trait Handler<T, Data, Out>: Send + Clone {
-    type Future: Future<Output = NextActionVector<Data, Out>> + Send + 'static;
-    fn handle(self, resp: Arc<Response>, data: Data) -> Self::Future;
+pub trait Handler<T, Ctx, Out>: Send + Clone {
+    type Future: Future<Output = NextActionVector<Ctx, Out>> + Send + 'static;
+    fn handle(self, resp: Arc<Response>, ctx: Ctx) -> Self::Future;
 }
 
-impl<F, Fut, FutOut, Data, Out> Handler<(), Data, Out> for F
+impl<F, Fut, FutOut, Ctx, Out> Handler<(), Ctx, Out> for F
 where
     F: FnOnce() -> Fut + Send + Clone + 'static,
     Fut: Future<Output = FutOut> + Send,
-    FutOut: IntoNextActionVec<Data, Out>,
+    FutOut: IntoNextActionVec<Ctx, Out>,
     Out: WebsiteOutput + 'static,
-    Data: 'static,
+    Ctx: 'static,
 {
-    type Future = Pin<Box<dyn Future<Output = NextActionVector<Data, Out>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = NextActionVector<Ctx, Out>> + Send>>;
 
-    fn handle(self, _resp: Arc<Response>, _data: Data) -> Self::Future {
+    fn handle(self, _resp: Arc<Response>, _ctx: Ctx) -> Self::Future {
         Box::pin(async move { self().await.into_next_action_vec() })
     }
 }
@@ -79,22 +79,22 @@ macro_rules! impl_handler {
     ) => {
         #[allow(non_snake_case, unused_mut)]
         #[async_trait]
-        impl<F, Fut, FutOut, Data, Out, $($ty,)*> Handler<($($ty,)*), Data, Out> for F
+        impl<F, Fut, FutOut, Ctx, Out, $($ty,)*> Handler<($($ty,)*), Ctx, Out> for F
         where
             F: FnOnce($($ty,)*) -> Fut + Clone + Send + 'static,
             Fut: Future<Output = FutOut> + Send,
-            FutOut: IntoNextActionVec<Data, Out>,
+            FutOut: IntoNextActionVec<Ctx, Out>,
             Out: WebsiteOutput + 'static,
-            Data: 'static + Send + Sync,
-            $( $ty: FromResponse<Data> + Send, )*
+            Ctx: 'static + Send + Sync,
+            $( $ty: FromResponse<Ctx> + Send, )*
         {
-            type Future = Pin<Box<dyn Future<Output = NextActionVector<Data, Out>> + Send>>;
+            type Future = Pin<Box<dyn Future<Output = NextActionVector<Ctx, Out>> + Send>>;
 
-            fn handle(self, resp: Arc<Response>, data: Data) -> Self::Future {
+            fn handle(self, resp: Arc<Response>, ctx: Ctx) -> Self::Future {
                 Box::pin(async move {
-                    let data = data;
+                    let ctx = ctx;
                     $(
-                        let $ty = match $ty::from_response(resp.as_ref(), &data).await {
+                        let $ty = match $ty::from_response(resp.as_ref(), &ctx).await {
                             Some($ty) => $ty,
                             _ => { return Vec::new() }
                         };

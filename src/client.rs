@@ -18,14 +18,14 @@ where
     Out: 'static,
     Website: WebsiteWrapper<Out>,
 {
-    pub fn new(websites: Website) -> Self {
+    pub fn handle(websites: Website) -> Self {
         Self {
             websites,
             _marker: Default::default(),
         }
     }
 
-    pub fn handle_website<T: WebsiteWrapper<Out> + 'static>(
+    pub fn and<T: WebsiteWrapper<Out> + 'static>(
         self,
         t: T,
     ) -> Client<Out, WebsitePair<T, Website, Out>> {
