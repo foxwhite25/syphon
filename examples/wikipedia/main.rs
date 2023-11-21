@@ -1,11 +1,11 @@
 #![feature(async_fn_in_trait)]
 
 use futures::StreamExt;
-use log::{debug, info, warn};
+use log::info;
 use reqwest::Url;
 use std::fmt::Debug;
 use syphon::client::Client;
-use syphon::extractor::{self, Context, SearchSelectors, Selector};
+use syphon::extractor::{self, SearchSelectors, Selector};
 use syphon::next_action::WebsiteOutput;
 use syphon::website::Website;
 
@@ -60,6 +60,7 @@ async fn visit_next_urls(
 
 #[tokio::main]
 async fn main() {
+    std::env::set_var("RUST_LOG", "wikipedia");
     env_logger::init();
 
     let wikipedia: Website<(), Output> = Website::new()
@@ -75,6 +76,8 @@ async fn main() {
     let mut stream = Client::handle(wikipedia).stream();
 
     while let Some(o) = stream.next().await {
-        info!("{:?}", o)
+        if o.language >= 10 {
+            info!("Popular: {:?}", o)
+        }
     }
 }

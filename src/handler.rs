@@ -1,32 +1,64 @@
 use std::{marker::PhantomData, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
-use futures::{future::BoxFuture, Future};
+use futures::{
+    future::{join_all, BoxFuture},
+    Future,
+};
 
 use crate::{
     next_action::{IntoNextActionVec, NextActionVector, WebsiteOutput},
     response::{FromResponse, Response},
 };
 
-pub(crate) trait HandlerWrapper<Ctx, Out> {
-    fn handle(
-        &self,
+pub struct HandlerPair<Ctx, Out, T1, T2>(T1, T2, PhantomData<fn() -> (Ctx, Out)>)
+where
+    T1: HandlerWrapper<Ctx, Out>,
+    T2: HandlerWrapper<Ctx, Out>;
+
+impl<Ctx, Out, T1, T2> HandlerWrapper<Ctx, Out> for HandlerPair<Ctx, Out, T1, T2>
+where
+    T1: HandlerWrapper<Ctx, Out> + Sync + Send,
+    T2: HandlerWrapper<Ctx, Out> + Sync + Send,
+    Ctx: Clone + Send + Sync,
+    Out: Send,
+{
+    fn handle<'a>(
+        &'a self,
         resp: Arc<Response>,
         ctx: Ctx,
-    ) -> BoxFuture<'static, NextActionVector<Ctx, Out>>;
+    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>> {
+        let fut1 = self.0.handle(resp.clone(), ctx.clone());
+        let fut2 = self.1.handle(resp, ctx);
+        Box::pin(async move { join_all([fut1, fut2]).await.into_iter().flatten().collect() })
+    }
+}
+pub trait HandlerWrapper<Ctx, Out> {
+    fn handle<'a>(
+        &'a self,
+        resp: Arc<Response>,
+        ctx: Ctx,
+    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>>;
+
+    fn pair<T>(self, other: T) -> HandlerPair<Ctx, Out, T, Self>
+    where
+        T: HandlerWrapper<Ctx, Out> + Sized,
+        Self: Sized,
+    {
+        HandlerPair(other, self, Default::default())
+    }
 }
 
 impl<H, T, Ctx, Out> HandlerWrapper<Ctx, Out> for HandlerBox<H, T, Ctx, Out>
 where
     Ctx: Send,
-    H: Handler<T, Ctx, Out> + Send + 'static,
-    Ctx: 'static,
+    H: Handler<T, Ctx, Out> + Send,
 {
-    fn handle(
-        &self,
+    fn handle<'a>(
+        &'a self,
         resp: Arc<Response>,
         ctx: Ctx,
-    ) -> BoxFuture<'static, NextActionVector<Ctx, Out>> {
+    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>> {
         let fut = self.inner.clone();
         let fut = async move { fut.handle(resp, ctx).await };
         Box::pin(fut)

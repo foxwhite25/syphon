@@ -10,23 +10,26 @@ use tokio::{
 };
 
 use crate::{
-    handler::{Handler, HandlerBox, HandlerWrapper},
+    handler::{Handler, HandlerBox, HandlerPair, HandlerWrapper},
     next_action::{NextAction, NextActionVector, NextUrl},
     response::Response,
 };
 
-type Handle<Ctx, Out> = Vec<Box<dyn HandlerWrapper<Ctx, Out> + Send + Sync>>;
-
-pub struct WebsiteBuilder<Ctx, Out> {
+pub struct WebsiteBuilder<Ctx, Out, Handler>
+where
+    Handler: HandlerWrapper<Ctx, Out>,
+{
     starting_urls: Vec<Url>,
     parallel_limit: usize,
-    handler: Handle<Ctx, Out>,
+    handler: Handler,
+    _maker: PhantomData<fn() -> (Ctx, Out)>,
 }
 
-impl<Ctx, Out> WebsiteBuilder<Ctx, Out>
+impl<Ctx, Out, Handle> WebsiteBuilder<Ctx, Out, Handle>
 where
-    Ctx: Send + 'static,
-    Out: 'static,
+    Ctx: Send + 'static + Clone + Sync,
+    Out: 'static + Send,
+    Handle: HandlerWrapper<Ctx, Out> + Send + Sync,
 {
     pub fn parallel_limit(mut self, limit: usize) -> Self {
         self.parallel_limit = limit;
@@ -38,19 +41,26 @@ where
         self
     }
 
-    pub fn handle<T, H>(mut self, handler: H) -> Self
+    pub fn handle<T, H>(self, handler: H) -> WebsiteBuilder<Ctx, Out, impl HandlerWrapper<Ctx, Out>>
     where
         T: 'static,
-        H: Handler<T, Ctx, Out> + Send + Sync + 'static,
+        H: crate::handler::Handler<T, Ctx, Out> + Send + Sync + 'static,
     {
         let wrapper = HandlerBox::from_handler(handler);
-        self.handler.push(Box::new(wrapper));
-        self
+        WebsiteBuilder {
+            starting_urls: self.starting_urls,
+            parallel_limit: self.parallel_limit,
+            handler: self.handler.pair(wrapper),
+            _maker: Default::default(),
+        }
     }
 }
 
-impl<Ctx, Out> From<WebsiteBuilder<Ctx, Out>> for Website<Ctx, Out> {
-    fn from(val: WebsiteBuilder<Ctx, Out>) -> Self {
+impl<Ctx, Out, Handler> From<WebsiteBuilder<Ctx, Out, Handler>> for Website<Ctx, Out, Handler>
+where
+    Handler: HandlerWrapper<Ctx, Out>,
+{
+    fn from(val: WebsiteBuilder<Ctx, Out, Handler>) -> Self {
         Website {
             starting_urls: Arc::new(val.starting_urls),
             parallel_limit: val.parallel_limit,
@@ -58,25 +68,34 @@ impl<Ctx, Out> From<WebsiteBuilder<Ctx, Out>> for Website<Ctx, Out> {
             join_handler: None,
             sender: None,
             duplicate: Default::default(),
+            _maker: Default::default(),
         }
     }
 }
 
-pub struct Website<Ctx, Out> {
+pub struct Website<Ctx, Out, Handler>
+where
+    Handler: HandlerWrapper<Ctx, Out>,
+{
     starting_urls: Arc<Vec<Url>>,
     parallel_limit: usize,
-    handler: Arc<Handle<Ctx, Out>>,
+    handler: Arc<Handler>,
     join_handler: Option<JoinHandle<()>>,
     sender: Option<mpsc::Sender<NextUrl<Ctx>>>,
     duplicate: Arc<Mutex<HashSet<String>>>,
+    _maker: PhantomData<fn() -> Out>,
 }
 
-impl<Ctx, Out> Website<Ctx, Out> {
-    pub fn new() -> WebsiteBuilder<Ctx, Out> {
+impl<Ctx, Out, Handler> Website<Ctx, Out, Handler>
+where
+    Handler: HandlerWrapper<Ctx, Out>,
+{
+    pub fn handle(handler: Handler) -> WebsiteBuilder<Ctx, Out, Handler> {
         WebsiteBuilder {
             starting_urls: Default::default(),
             parallel_limit: 16,
-            handler: Default::default(),
+            handler,
+            _maker: Default::default(),
         }
     }
 }
@@ -115,10 +134,11 @@ where
     }
 }
 
-impl<Ctx, Output> WebsiteWrapper<Output> for Website<Ctx, Output>
+impl<Ctx, Output, Handler> WebsiteWrapper<Output> for Website<Ctx, Output, Handler>
 where
     Ctx: Clone + Send + 'static + Default + Sync + Debug,
     Output: Send + 'static + Debug,
+    Handler: HandlerWrapper<Ctx, Output> + Send + Sync + 'static,
 {
     fn init(&mut self, output_sender: mpsc::Sender<Output>) {
         let (cx, rx) = mpsc::channel(self.parallel_limit * 4);
@@ -150,14 +170,15 @@ where
     }
 }
 
-async fn _worker<Ctx, Out>(
+async fn _worker<Ctx, Out, Handler>(
     url: Url,
     data: Ctx,
-    handler: Arc<Handle<Ctx, Out>>,
+    handler: Arc<Handler>,
     client: reqwest::Client,
 ) -> NextActionVector<Ctx, Out>
 where
     Ctx: Clone,
+    Handler: HandlerWrapper<Ctx, Out>,
 {
     let Ok(resp) = client.execute(Request::new(Method::GET, url)).await else {
             return Vec::new();
@@ -168,22 +189,18 @@ where
         }; // TODO: Same as above
     let resp = Arc::new(resp);
 
-    let handlers = handler.iter().map(|handler| {
-        let data = data.clone();
-        let resp = resp.clone();
-        handler.handle(resp, data)
-    });
-    join_all(handlers).await.into_iter().flatten().collect()
+    handler.handle(resp.clone(), data.clone()).await
 }
 
-async fn _fetcher<Ctx, Out>(
+async fn _fetcher<Ctx, Out, Handler>(
     parallel_limit: usize,
     cx: mpsc::Sender<NextUrl<Ctx>>,
     mut rx: mpsc::Receiver<NextUrl<Ctx>>,
-    handlers: Arc<Handle<Ctx, Out>>,
+    handlers: Arc<Handler>,
     output_sender: mpsc::Sender<Out>,
     duplicate: Arc<Mutex<HashSet<String>>>,
 ) where
+    Handler: HandlerWrapper<Ctx, Out> + Send + Sync + 'static,
     Ctx: Clone + Debug + Send + Sync + 'static,
     Out: Debug + Send + 'static,
 {
@@ -193,13 +210,10 @@ async fn _fetcher<Ctx, Out>(
         let handlers = handlers.clone();
         let output_sender = output_sender.clone();
         let cx = cx.clone();
-        let sem = sem.clone();
+        let permit = sem.clone().acquire_owned().await.unwrap();
         let duplicate = duplicate.clone();
         let client = client.clone();
         tokio::spawn(async move {
-            let Ok(permit) = sem.acquire_owned().await else {
-                return;
-            };
             let actions = _worker(next.url, next.data, handlers, client).await;
             for next_action in actions {
                 debug!("next action: {:?}", next_action);

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use itertools::Itertools;
-use proc_macro::{Ident, TokenStream};
+use proc_macro::TokenStream;
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{
     parse_macro_input, DeriveInput, FieldsNamed, GenericArgument, Meta, PathArguments, PathSegment,
@@ -120,7 +119,7 @@ impl<'src> Field<'src> {
         let name = self.name;
         let field = self.field_type.output();
         let varience = self.varience.output();
-        let selector: &str = &self.selector.replace("\"", "");
+        let selector: &str = &self.selector.replace('\"', "");
         quote!(
             let #name = dom.select(&scraper::Selector::parse(#selector).ok()?)
                 #varience
@@ -154,7 +153,7 @@ impl<'src> Context<'src> {
                 .first() else {
                     return false;
                 };
-                        first.ident.to_string() == "select"
+                        first.ident == "select"
                     })
                     .unwrap_or_else(|| {
                         panic!("Unable to find attr \"select\" on field \"{name}\" ")
@@ -162,9 +161,9 @@ impl<'src> Context<'src> {
 
                 let select = select.tokens.to_string();
                 let attrs = select
-                    .split(",")
+                    .split(',')
                     .map(|s| s.trim())
-                    .map(|trimmed| match trimmed.split_once("=") {
+                    .map(|trimmed| match trimmed.split_once('=') {
                         Some(x) => x,
                         None => (trimmed, "true"),
                     })
