@@ -23,22 +23,14 @@ where
     Ctx: Clone + Send + Sync,
     Out: Send,
 {
-    fn handle<'a>(
-        &'a self,
-        resp: Arc<Response>,
-        ctx: Ctx,
-    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>> {
+    fn handle(&self, resp: Arc<Response>, ctx: Ctx) -> BoxFuture<'_, NextActionVector<Ctx, Out>> {
         let fut1 = self.0.handle(resp.clone(), ctx.clone());
         let fut2 = self.1.handle(resp, ctx);
         Box::pin(async move { join_all([fut1, fut2]).await.into_iter().flatten().collect() })
     }
 }
 pub trait HandlerWrapper<Ctx, Out> {
-    fn handle<'a>(
-        &'a self,
-        resp: Arc<Response>,
-        ctx: Ctx,
-    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>>;
+    fn handle(&self, resp: Arc<Response>, ctx: Ctx) -> BoxFuture<'_, NextActionVector<Ctx, Out>>;
 
     fn pair<T>(self, other: T) -> HandlerPair<Ctx, Out, T, Self>
     where
@@ -54,18 +46,14 @@ where
     Ctx: Send,
     H: Handler<T, Ctx, Out> + Send,
 {
-    fn handle<'a>(
-        &'a self,
-        resp: Arc<Response>,
-        ctx: Ctx,
-    ) -> BoxFuture<'a, NextActionVector<Ctx, Out>> {
+    fn handle(&self, resp: Arc<Response>, ctx: Ctx) -> BoxFuture<'_, NextActionVector<Ctx, Out>> {
         let fut = self.inner.clone();
         let fut = async move { fut.handle(resp, ctx).await };
         Box::pin(fut)
     }
 }
 
-pub(crate) struct HandlerBox<H, T, Ctx, Out>
+pub struct HandlerBox<H, T, Ctx, Out>
 where
     H: Handler<T, Ctx, Out> + Send,
 {

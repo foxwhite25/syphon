@@ -1,6 +1,5 @@
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
-use futures::future::join_all;
 use hashbrown::HashSet;
 use log::{debug, error};
 use reqwest::{Method, Request, Url};
@@ -10,7 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    handler::{Handler, HandlerBox, HandlerPair, HandlerWrapper},
+    handler::{Handler, HandlerBox, HandlerWrapper},
     next_action::{NextAction, NextActionVector, NextUrl},
     response::Response,
 };
@@ -41,7 +40,7 @@ where
         self
     }
 
-    pub fn handle<T, H>(self, handler: H) -> WebsiteBuilder<Ctx, Out, impl HandlerWrapper<Ctx, Out>>
+    pub fn and<T, H>(self, handler: H) -> WebsiteBuilder<Ctx, Out, impl HandlerWrapper<Ctx, Out>>
     where
         T: 'static,
         H: crate::handler::Handler<T, Ctx, Out> + Send + Sync + 'static,
@@ -86,15 +85,16 @@ where
     _maker: PhantomData<fn() -> Out>,
 }
 
-impl<Ctx, Out, Handler> Website<Ctx, Out, Handler>
+impl<Ctx, Out, T, Handler> Website<Ctx, Out, HandlerBox<Handler, T, Ctx, Out>>
 where
-    Handler: HandlerWrapper<Ctx, Out>,
+    Handler: crate::handler::Handler<T, Ctx, Out>,
+    Ctx: std::marker::Send,
 {
-    pub fn handle(handler: Handler) -> WebsiteBuilder<Ctx, Out, Handler> {
+    pub fn handle(handler: Handler) -> WebsiteBuilder<Ctx, Out, HandlerBox<Handler, T, Ctx, Out>> {
         WebsiteBuilder {
             starting_urls: Default::default(),
             parallel_limit: 16,
-            handler,
+            handler: HandlerBox::from_handler(handler),
             _maker: Default::default(),
         }
     }

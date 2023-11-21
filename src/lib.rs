@@ -1,6 +1,4 @@
 #![feature(async_fn_in_trait)]
-#![feature(negative_impls)]
-#![feature(auto_traits)]
 #![allow(suspicious_auto_trait_impls)]
 #![allow(clippy::new_ret_no_self)]
 #![allow(clippy::type_complexity)]

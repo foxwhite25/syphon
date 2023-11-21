@@ -1,5 +1,3 @@
-#![feature(async_fn_in_trait)]
-
 use futures::StreamExt;
 use log::info;
 use reqwest::Url;
@@ -63,14 +61,13 @@ async fn main() {
     std::env::set_var("RUST_LOG", "wikipedia");
     env_logger::init();
 
-    let wikipedia: Website<(), Output> = Website::new()
+    let wikipedia: Website<(), Output, _> = Website::handle(from_title)
+        .and(visit_next_urls)
         .start_with(
             Url::parse("https://en.wikipedia.org/wiki/Special:Random")
                 .expect("Unable to parse starting Url"),
         )
         .parallel_limit(256)
-        .handle(from_title)
-        .handle(visit_next_urls)
         .into();
 
     let mut stream = Client::handle(wikipedia).stream();
