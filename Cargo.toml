@@ -21,6 +21,7 @@ tokio-stream = "0.1.14"
 log = "0.4.20"
 hashbrown = "0.14.2"
 scraper = "0.18.1"
+scc = "2.0.4"
 
 [dev-dependencies]
 env_logger = "0.10.0"

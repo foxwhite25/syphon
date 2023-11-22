@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use log::info;
+use log::{info, warn};
 use reqwest::Url;
 use std::fmt::Debug;
 use syphon::client::Client;
@@ -28,6 +28,7 @@ struct TitleExtractor {
 }
 
 async fn from_title(Selector(title): Selector<TitleExtractor>) -> Option<Output> {
+    info!("parsed dom, {:?}", title);
     let language = title
         .language_count
         .split_ascii_whitespace()
@@ -49,6 +50,7 @@ async fn visit_next_urls(
     Selector(anchors): Selector<AnchorExtractor>,
     extractor::Url(url): extractor::Url,
 ) -> Vec<Url> {
+    info!("Visiting: {}", url);
     anchors
         .anchor
         .into_iter()
@@ -58,7 +60,7 @@ async fn visit_next_urls(
 
 #[tokio::main]
 async fn main() {
-    std::env::set_var("RUST_LOG", "wikipedia");
+    std::env::set_var("RUST_LOG", "syphon,wikipedia");
     env_logger::init();
 
     let wikipedia: Website<(), Output, _> = Website::handle(from_title)
@@ -73,8 +75,6 @@ async fn main() {
     let mut stream = Client::handle(wikipedia).stream();
 
     while let Some(o) = stream.next().await {
-        if o.language >= 10 {
-            info!("Popular: {:?}", o)
-        }
+        info!("{:?}", o);
     }
 }

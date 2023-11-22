@@ -1,7 +1,8 @@
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
+use futures::future::join_all;
 use hashbrown::HashSet;
-use log::{debug, error};
+use log::{debug, error, info, warn};
 use reqwest::{Method, Request, Url};
 use tokio::{
     sync::{mpsc, Mutex, Semaphore},
@@ -66,7 +67,6 @@ where
             handler: Arc::from(val.handler),
             join_handler: None,
             sender: None,
-            duplicate: Default::default(),
             _maker: Default::default(),
         }
     }
@@ -81,7 +81,6 @@ where
     handler: Arc<Handler>,
     join_handler: Option<JoinHandle<()>>,
     sender: Option<mpsc::Sender<NextUrl<Ctx>>>,
-    duplicate: Arc<Mutex<HashSet<String>>>,
     _maker: PhantomData<fn() -> Out>,
 }
 
@@ -144,11 +143,17 @@ where
         let (cx, rx) = mpsc::channel(self.parallel_limit * 4);
         let handlers = self.handler.clone();
         let parallel = self.parallel_limit;
-        let duplicate = self.duplicate.clone();
         self.sender = Some(cx.clone());
         self.join_handler = Some(tokio::spawn(async move {
-            duplicate.lock().await.clear();
-            _fetcher(parallel, cx, rx, handlers, output_sender, duplicate).await
+            _fetcher(
+                parallel,
+                cx,
+                rx,
+                handlers,
+                output_sender,
+                Default::default(),
+            )
+            .await
         }))
     }
 
@@ -180,13 +185,19 @@ where
     Ctx: Clone,
     Handler: HandlerWrapper<Ctx, Out>,
 {
-    let Ok(resp) = client.execute(Request::new(Method::GET, url)).await else {
-            return Vec::new();
-        }; // TODO: Error Handling/Expo. Backoff
+    debug!("Visiting {}", url);
+    let Ok(resp) = client.execute(Request::new(Method::GET, url.clone())).await else {
+        return Vec::new();
+    }; // TODO: Error Handling/Expo. Backoff
+
+    if resp.status() != 200 {
+        warn!("{} responsed with {}", url, resp.status());
+    }
 
     let Ok(resp) = Response::from_reqwest(resp).await else {
-            return Vec::new();
-        }; // TODO: Same as above
+        return Vec::new();
+    }; // TODO: Same as above
+
     let resp = Arc::new(resp);
 
     handler.handle(resp.clone(), data.clone()).await
@@ -198,7 +209,7 @@ async fn _fetcher<Ctx, Out, Handler>(
     mut rx: mpsc::Receiver<NextUrl<Ctx>>,
     handlers: Arc<Handler>,
     output_sender: mpsc::Sender<Out>,
-    duplicate: Arc<Mutex<HashSet<String>>>,
+    duplicate: Arc<scc::HashSet<String>>,
 ) where
     Handler: HandlerWrapper<Ctx, Out> + Send + Sync + 'static,
     Ctx: Clone + Debug + Send + Sync + 'static,
@@ -215,30 +226,35 @@ async fn _fetcher<Ctx, Out, Handler>(
         let client = client.clone();
         tokio::spawn(async move {
             let actions = _worker(next.url, next.data, handlers, client).await;
-            for next_action in actions {
-                debug!("next action: {:?}", next_action);
-                match next_action {
-                    NextAction::PipeOutput(output) => {
-                        output_sender
-                            .send(output)
-                            .await
-                            .unwrap_or_else(|err| error!("output_sender send error: {}", err));
-                    }
-                    NextAction::Visit(pair) => {
-                        {
-                            let mut lock = duplicate.lock().await;
-                            if lock.get(pair.url.path()).is_some() {
-                                continue;
-                            }
-                            lock.insert(pair.url.path().to_string());
+            drop(permit);
+            let futs = actions.into_iter().map(move |next_action| {
+                let output_sender = output_sender.clone();
+                let duplicate = duplicate.clone();
+                let cx = cx.clone();
+                async move {
+                    match next_action {
+                        NextAction::PipeOutput(output) => {
+                            output_sender
+                                .send(output)
+                                .await
+                                .unwrap_or_else(|err| error!("output_sender send error: {}", err));
                         }
-                        cx.send(pair)
-                            .await
-                            .unwrap_or_else(|err| error!("next url send error: {}", err));
+                        NextAction::Visit(pair) => {
+                            if duplicate
+                                .insert_async(pair.url.path().to_string())
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            };
+                            cx.send(pair)
+                                .await
+                                .unwrap_or_else(|err| error!("next url send error: {}", err));
+                        }
                     }
                 }
-            }
-            drop(permit)
+            });
+            tokio::spawn(async move { join_all(futs).await });
         });
     }
 }
