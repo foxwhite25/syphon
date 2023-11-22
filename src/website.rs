@@ -185,7 +185,6 @@ where
     Ctx: Clone,
     Handler: HandlerWrapper<Ctx, Out>,
 {
-    debug!("Visiting {}", url);
     let Ok(resp) = client.execute(Request::new(Method::GET, url.clone())).await else {
         return Vec::new();
     }; // TODO: Error Handling/Expo. Backoff
@@ -225,12 +224,14 @@ async fn _fetcher<Ctx, Out, Handler>(
         let duplicate = duplicate.clone();
         let client = client.clone();
         tokio::spawn(async move {
+            let url = Arc::new(next.url.host().map(|x| x.to_string()));
             let actions = _worker(next.url, next.data, handlers, client).await;
             drop(permit);
             let futs = actions.into_iter().map(move |next_action| {
                 let output_sender = output_sender.clone();
                 let duplicate = duplicate.clone();
                 let cx = cx.clone();
+                let url = url.clone();
                 async move {
                     match next_action {
                         NextAction::PipeOutput(output) => {
@@ -240,6 +241,9 @@ async fn _fetcher<Ctx, Out, Handler>(
                                 .unwrap_or_else(|err| error!("output_sender send error: {}", err));
                         }
                         NextAction::Visit(pair) => {
+                            if !pair.url.host().map(|x| x.to_string()).eq(&url) {
+                                return;
+                            }
                             if duplicate
                                 .insert_async(pair.url.path().to_string())
                                 .await
@@ -251,6 +255,7 @@ async fn _fetcher<Ctx, Out, Handler>(
                                 .await
                                 .unwrap_or_else(|err| error!("next url send error: {}", err));
                         }
+                        NextAction::None => {}
                     }
                 }
             });

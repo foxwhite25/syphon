@@ -22,50 +22,63 @@ impl<Data> NextUrl<Data> {
 pub enum NextAction<Data, Out> {
     PipeOutput(Out),
     Visit(NextUrl<Data>),
+    None,
 }
 
-impl<Data, Out> IntoNextActionVec<Data, Out> for NextUrl<Data>
+impl<Data, Out> IntoNextAction<Data, Out> for NextAction<Data, Out>
 where
     Out: WebsiteOutput,
 {
-    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
-        vec![NextAction::Visit(self)]
+    fn into_next_action(self) -> NextAction<Data, Out> {
+        self
     }
 }
 
-impl<Data, Out> IntoNextActionVec<Data, Out> for Url
+impl<Data, Out> IntoNextAction<Data, Out> for NextUrl<Data>
+where
+    Out: WebsiteOutput,
+{
+    fn into_next_action(self) -> NextAction<Data, Out> {
+        NextAction::Visit(self)
+    }
+}
+
+impl<Data, Out> IntoNextAction<Data, Out> for Url
 where
     Data: Default,
     Out: WebsiteOutput,
 {
-    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
-        vec![NextAction::Visit(NextUrl::new(self, Default::default()))]
+    fn into_next_action(self) -> NextAction<Data, Out> {
+        NextAction::Visit(NextUrl::new(self, Default::default()))
     }
 }
 
-impl<Data, Out> IntoNextActionVec<Data, Out> for Out
+impl<Data, Out> IntoNextAction<Data, Out> for Out
 where
     Out: WebsiteOutput,
 {
-    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
-        vec![NextAction::PipeOutput(self)]
+    fn into_next_action(self) -> NextAction<Data, Out> {
+        NextAction::PipeOutput(self)
     }
 }
 
-impl<Data, Out> IntoNextActionVec<Data, Out> for Option<Out>
+impl<Data, Out> IntoNextAction<Data, Out> for Option<Out>
 where
     Out: WebsiteOutput,
 {
-    fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
+    fn into_next_action(self) -> NextAction<Data, Out> {
         match self {
-            Some(out) => {
-                vec![NextAction::PipeOutput(out)]
-            }
-            None => {
-                vec![]
-            }
+            Some(out) => NextAction::PipeOutput(out),
+            None => NextAction::None,
         }
     }
+}
+
+pub trait IntoNextAction<Data, Out>
+where
+    Out: WebsiteOutput,
+{
+    fn into_next_action(self) -> NextAction<Data, Out>;
 }
 
 pub trait IntoNextActionVec<Data, Out>
@@ -77,12 +90,12 @@ where
 
 impl<Data, Out, T> IntoNextActionVec<Data, Out> for Vec<T>
 where
-    T: IntoNextActionVec<Data, Out>,
+    T: IntoNextAction<Data, Out>,
     Out: WebsiteOutput,
 {
     fn into_next_action_vec(self) -> NextActionVector<Data, Out> {
         self.into_iter()
-            .flat_map(IntoNextActionVec::into_next_action_vec)
+            .map(IntoNextAction::into_next_action)
             .collect()
     }
 }

@@ -4,7 +4,7 @@ use reqwest::Url;
 use std::fmt::Debug;
 use syphon::client::Client;
 use syphon::extractor::{self, SearchSelectors, Selector};
-use syphon::next_action::WebsiteOutput;
+use syphon::next_action::{IntoNextActionVec, NextAction, WebsiteOutput};
 use syphon::website::Website;
 
 #[derive(Debug)]
@@ -25,37 +25,33 @@ struct TitleExtractor {
     title: String,
     #[select(sel = "#p-lang-btn-checkbox", attr = "aria-label")]
     language_count: String,
+    #[select(sel = "#bodyContent a", attr = "href")]
+    anchor: Vec<String>,
 }
 
-async fn from_title(Selector(title): Selector<TitleExtractor>) -> Option<Output> {
-    info!("parsed dom, {:?}", title);
+async fn from_title(
+    Selector(title): Selector<TitleExtractor>,
+    extractor::Url(url): extractor::Url,
+) -> Vec<NextAction<(), Output>> {
+    let mut next_urls = title
+        .anchor
+        .into_iter()
+        .filter_map(|u| url.join(&u).ok())
+        .collect::<Vec<_>>()
+        .into_next_action_vec();
+
     let language = title
         .language_count
         .split_ascii_whitespace()
         .filter_map(|x| x.parse().ok())
         .next()
         .unwrap_or(0);
-    Some(Output {
+
+    next_urls.push(NextAction::PipeOutput(Output {
         title: title.title,
         language,
-    })
-}
-#[derive(SearchSelectors, Debug)]
-struct AnchorExtractor {
-    #[select(sel = "#bodyContent a", attr = "href")]
-    anchor: Vec<String>,
-}
-
-async fn visit_next_urls(
-    Selector(anchors): Selector<AnchorExtractor>,
-    extractor::Url(url): extractor::Url,
-) -> Vec<Url> {
-    info!("Visiting: {}", url);
-    anchors
-        .anchor
-        .into_iter()
-        .filter_map(|u| url.join(&u).ok())
-        .collect()
+    }));
+    next_urls
 }
 
 #[tokio::main]
@@ -64,7 +60,6 @@ async fn main() {
     env_logger::init();
 
     let wikipedia: Website<(), Output, _> = Website::handle(from_title)
-        .and(visit_next_urls)
         .start_with(
             Url::parse("https://en.wikipedia.org/wiki/Special:Random")
                 .expect("Unable to parse starting Url"),
